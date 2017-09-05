@@ -1,19 +1,13 @@
 import tweepy
-<<<<<<< HEAD
 import json
 
 s=open("/home/bitnami/auth/twit.auth","r").read()
 
-myKey=json.loads(s)["Key"]
-mySecret=json.loads(s)['Secret"]
+myKey=json.loads(s)["key"]
+mySecret=json.loads(s)['secret"]
 
 # Replace the API_KEY and API_SECRET with your application's key and secret.
 auth = tweepy.AppAuthHandler(myKey, mySecret)
-=======
-
-# Replace the API_KEY and API_SECRET with your application's key and secret.
-auth = tweepy.AppAuthHandler('KaIAbJkyygxMFjqTooPVsj279', 'PLoAp4ftRXtsjI2RFqBo9LCYEE66yfVVqheIFHkivCs3weQmiI')
->>>>>>> ee74f56e9c14264079c0ab81580450f77d6cb4d0
 
 api = tweepy.API(auth, wait_on_rate_limit=True,
                                    wait_on_rate_limit_notify=True)
