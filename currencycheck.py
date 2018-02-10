@@ -5,6 +5,105 @@ import pandas as pd
 import requests
 import mysql_prices
 
+def update_spreadsheet(my_spreadsheet, trans_worksheet):
+    voo = stock_ticker_hist('voo')
+
+    #Transaction df
+    trans_df = fromsheet.pull_worksheet(my_spreadsheet, trans_worksheet, None)
+    #Fix column types
+    trans_df['Date'] = pd.to_datetime(trans_df['Date'])
+    trans_df['pUSD'] = pd.to_numeric(trans_df['pUSD']).fillna(0)
+    trans_df['Transfer'] = pd.to_numeric(trans_df['Transfer']).fillna(0)
+    trans_df['Amount'] = pd.to_numeric(trans_df['Amount'])
+    
+    idf = trans_df[trans_df['type'] == 'index'].reset_index(drop=True)
+    
+    tdf, trans_principal_df = prepare_transaction_df(trans_df)
+    
+    #Make List of Traded Coins
+    all_coins = list(set(tdf['Currency']))
+    
+    # Move this into a separate script
+    # Update MySQL
+    less_mins = True
+    mysql_prices.update_prices_usd_minute(less_mins)
+    mysql_prices.update_prices_usd_day(all_coins, 2)
+    
+    top_mc = top_ticker_list(150)
+    top_mc = top_mc[top_mc.symbol != 'USDT']
+    top_mc.loc[top_mc['symbol'] == 'MIOTA', 'symbol'] = 'IOT'
+    tosheet.insert_df(top_mc, my_spreadsheet, 'coinmarketcap', 0)
+    
+    cur_est_cry_bals = tdf.groupby(['Currency'])['Transfer'].sum().reset_index()
+    tosheet.insert_df(cur_est_cry_bals, my_spreadsheet, 'EstBals', 0)
+    
+    manage_trans_to_sheet(tdf, trans_principal_df, voo, my_spreadsheet)
+    
+    if len(idf) > 0:
+        manage_index_to_sheet(idf, idf_principal, voo, my_spreadsheet)
+
+
+def manage_index_to_sheet(idf, df, voo, my_spreadsheet):
+    # Calculate Price paid, move to google sheet?
+    idf['p'] = idf.merge(df[['date', 'currency', 'mean']], how = 'left', left_on = ['Date', 'Currency'], right_on = ['date', 'currency'])[['mean']]
+    idf.pUSD = idf.p * idf.Transfer * -1
+    idf = idf[['Bought', 'Date', 'Amount', 'pUSD']]
+    idf.columns = ['Currency','Date','Transfer','pUSD']
+    idf_principal_df = idf[['Date', 'pUSD']].groupby(['Date']).sum()
+    
+    index_daily, index_totals, index_returns, index_roi = make_tables(idf, idf_principal_df, voo)
+    print("Inserting Indexes")
+    tosheet.insert_df(index_daily, my_spreadsheet, 'indexDaily', 0)
+    tosheet.insert_df(index_totals, my_spreadsheet, 'indexTotals', 0)
+    tosheet.insert_df(index_returns, my_spreadsheet, 'indexReturns', 0)
+    tosheet.insert_df(index_roi, my_spreadsheet, 'indexROI', 0)
+
+
+
+def manage_trans_to_sheet(trans_df, trans_principal_df, voo, my_spreadsheet):
+    tdf_daily, tdf_totals, tdf_returns, tdf_roi = make_tables(trans_df, trans_principal_df, voo)
+    
+    print("Inserting Totals")
+    tosheet.insert_df(tdf_daily, my_spreadsheet, 'Daily', 0)
+    tosheet.insert_df(tdf_roi, my_spreadsheet, 'ROI', 0)
+    tosheet.insert_df(tdf_totals, my_spreadsheet, 'DailyTotals', 0)
+    tosheet.insert_df(tdf_returns, my_spreadsheet, 'Returns', 0)
+
+
+
+def prepare_transaction_df(tdf):
+    #Group by total USD, used later to calculate total spend
+    trans_principal_df = tdf[['Date', 'pUSD']].groupby(['Date']).sum()
+    
+    #Create several cumulative sums of currencies and USD
+    tdf['cumsum'] = tdf.groupby(['Currency'])['Transfer'].cumsum()
+    tdf['UScum'] = tdf.groupby(['Currency'])['pUSD'].cumsum()
+    tdf['lastcum'] = tdf.groupby(['Currency'])['cumsum'].shift(1)
+    tdf['poc'] = np.where(tdf['Transfer'] < 0, (tdf['Transfer'] / tdf['lastcum']).fillna(0), 0)
+    
+    tg = tdf.groupby(['Currency'])
+    grouplist = []
+    for name, group in tg:
+        new = [group['pUSD'].values[0]]
+        pval = [0]
+        for i in range(1, len(group.index)):
+            pval.append(group.poc.values[i] * new[i - 1])
+            new.append(group.UScum.values[i] + sum(pval[0:i+1]))
+        group.loc[:, 'pval'] = pval.copy()
+        grouplist.append(group)
+    
+    pvaldf = pd.concat(grouplist).sort_index()
+    
+    new = pvaldf[pvaldf['Bought'] != ""][['Bought', 'Date', 'Amount', 'pval']]
+    new.columns = ['Currency','Date','Transfer','pUSD']
+    
+    tdf = pd.concat([pvaldf, new]).fillna(0)
+    tdf['pUSD'] = tdf['pUSD'].abs()
+    tdf['Transfer'] = pd.to_numeric(tdf['Transfer'])
+    tdf = tdf.groupby(['Currency', 'Date'])['pUSD', 'poc', 'pval', 'Transfer'].sum().reset_index()
+    tdf['pUSD'] = tdf['pUSD'] + tdf['pval']
+    return(tdf, trans_principal_df)
+
 
 
 def stock_ticker_hist(x):
@@ -21,6 +120,7 @@ def top_ticker_list(x):
     headers = {'Content-Type': 'application/json'}
     r = requests.get(cmc_api_url, headers)
     r = pd.DataFrame.from_records(r.json())
+    r = r[['available_supply', 'id', 'market_cap_usd', 'percent_change_7d', 'price_usd', 'symbol']]
     return r
 
 
@@ -57,6 +157,7 @@ def make_tables(my_df, principal_df, stock):
     my_df['Return @VOO'] = my_df['tmp'].cumsum()
     my_df['Total @VOO'] = my_df['Principal'] + my_df['Return @VOO']
     my_df = my_df.drop(['tmp'], axis = 1)
+    my_df = my_df.drop(['changePercent'], axis = 1)
     #Rearrange, GS graphs farther to the right columns on top
     cols = [col for col in my_df if col not in ['TotalValue','Return']] + ['Return'] + ['TotalValue']
     my_df = my_df[cols]
@@ -67,116 +168,11 @@ def make_tables(my_df, principal_df, stock):
     roi = roi.replace(np.nan, 0)
     return(my_df, my_df_totals, returns, roi)
 
+trans_worksheet = "Trans"
 
-#Google Sheet names, Worksheet = Main Worksheet, Sheet = tabs in sheet
-my_spreadsheet = "housechart"
-my_worksheet = "Trans"
+update_spreadsheet("housechart", trans_worksheet)
 
-#Transaction df
-tdf = fromsheet.pull_worksheet(my_spreadsheet, my_worksheet, None)
-
-voo = stock_ticker_hist('voo')
-
-
-#Fix column types
-tdf['Date'] = pd.to_datetime(tdf['Date'])
-tdf['pUSD'] = pd.to_numeric(tdf['pUSD']).fillna(0)
-tdf['Transfer'] = pd.to_numeric(tdf['Transfer']).fillna(0)
-tdf['Amount'] = pd.to_numeric(tdf['Amount'])
-
-idf = tdf[tdf['type'] == 'index'].reset_index(drop=True)
-index_coins = list(set(idf.Currency.tolist() + idf.Bought.tolist()))
-
-#Group by total USD, used later to calculate total spend
-tdf_principal_df = tdf[['Date', 'pUSD']].groupby(['Date']).sum()
-
-#Start Date
-mysd = min(tdf['Date'].tolist())
-
-#Create several cumulative sums of currencies and USD
-tdf['cumsum'] = tdf.groupby(['Currency'])['Transfer'].cumsum()
-tdf['UScum'] = tdf.groupby(['Currency'])['pUSD'].cumsum()
-tdf['lastcum'] = tdf.groupby(['Currency'])['cumsum'].shift(1)
-tdf['poc'] = np.where(tdf['Transfer'] < 0, (tdf['Transfer'] / tdf['lastcum']).fillna(0), 0)
-
-tg = tdf.groupby(['Currency'])
-grouplist = []
-for name, group in tg:
-    print(name)
-    new = [group['pUSD'].values[0]]
-    pval = [0]
-    for i in range(1, len(group.index)):
-        pval.append(group.poc.values[i] * new[i - 1])
-        new.append(group.UScum.values[i] + sum(pval[0:i+1]))
-    group.loc[:, 'pval'] = pval.copy()
-    grouplist.append(group)
-
-
-pvaldf = pd.concat(grouplist).sort_index()
-
-new = pvaldf[pvaldf['Bought'] != ""][['Bought', 'Date', 'Amount', 'pval']]
-new.columns = ['Currency','Date','Transfer','pUSD']
-
-tdf = pd.concat([pvaldf, new]).fillna(0)
-tdf['pUSD'] = tdf['pUSD'].abs()
-tdf['Transfer'] = pd.to_numeric(tdf['Transfer'])
-tdf = tdf.groupby(['Currency', 'Date'])['pUSD', 'poc', 'pval', 'Transfer'].sum().reset_index()
-tdf['pUSD'] = tdf['pUSD'] + tdf['pval']
-
-
-
-#Make List of Traded Coins
-all_coins = list(set(tdf['Currency']))
-
-
-
-
-#Update MySQL
-less_mins = True
-mysql_prices.update_prices_usd_minute(less_mins)
-mysql_prices.update_prices_usd_day(all_coins, 2)
-
-
-
-
-#Get ByDay Prices
-df = mysql_prices.get_prices_usd_day(all_coins, mysd)
-df['date'] = pd.to_datetime(df['date'])
-
-# Calculate Price paid, move to google sheet?
-idf['p'] = idf.merge(df[['date', 'currency', 'mean']], how = 'left', left_on = ['Date', 'Currency'], right_on = ['date', 'currency'])[['mean']]
-idf.pUSD = idf.p * idf.Transfer * -1
-idf = idf[['Bought', 'Date', 'Amount', 'pUSD']]
-idf.columns = ['Currency','Date','Transfer','pUSD']
-idf_principal_df = idf[['Date', 'pUSD']].groupby(['Date']).sum()
-
-
-top_mc = top_ticker_list(100)
-top_mc = top_mc[['available_supply', 'id', 'market_cap_usd', 'percent_change_7d', 'price_usd', 'symbol']]
-top_mc = top_mc[top_mc.symbol != 'USDT']
-top_mc.loc[top_mc['symbol'] == 'MIOTA', 'symbol'] = 'IOT'
-tosheet.insert_df(top_mc, my_spreadsheet, 'coinmarketcap', 0)
-
-
-index_daily, index_totals, index_returns, index_roi = make_tables(idf, idf_principal_df, voo)
-print("Inserting Indexes")
-tosheet.insert_df(index_daily, my_spreadsheet, 'indexDaily', 0)
-tosheet.insert_df(index_totals, my_spreadsheet, 'indexTotals', 0)
-tosheet.insert_df(index_returns, my_spreadsheet, 'indexReturns', 0)
-tosheet.insert_df(index_roi, my_spreadsheet, 'indexROI', 0)
-
-
-tdf_daily, tdf_totals, tdf_returns, tdf_roi = make_tables(tdf, tdf_principal_df, voo)
-print("Inserting Totals")
-tosheet.insert_df(tdf_daily, my_spreadsheet, 'Daily', 0)
-tosheet.insert_df(tdf_roi, my_spreadsheet, 'ROI', 0)
-tosheet.insert_df(tdf_totals, my_spreadsheet, 'DailyTotals', 0)
-tosheet.insert_df(tdf_returns, my_spreadsheet, 'Returns', 0)
-
-
-cur_est_cry_bals = tdf.groupby(['Currency'])['Transfer'].sum().reset_index()
-tosheet.insert_df(cur_est_cry_bals, my_spreadsheet, 'EstBals', 0)
-
+update_spreadsheet("BitExcelChart", trans_worksheet)
 
 
 
