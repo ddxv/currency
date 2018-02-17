@@ -7,7 +7,7 @@ import mysql_prices
 
 def update_spreadsheet(my_spreadsheet, trans_worksheet):
     voo = stock_ticker_hist('voo')
-
+    
     #Transaction df
     trans_df = fromsheet.pull_worksheet(my_spreadsheet, trans_worksheet, None)
     #Fix column types
@@ -40,17 +40,17 @@ def update_spreadsheet(my_spreadsheet, trans_worksheet):
     manage_trans_to_sheet(tdf, trans_principal_df, voo, my_spreadsheet)
     
     if len(idf) > 0:
-        manage_index_to_sheet(idf, idf_principal, voo, my_spreadsheet)
+        manage_index_to_sheet(idf, voo, my_spreadsheet)
 
 
-def manage_index_to_sheet(idf, df, voo, my_spreadsheet):
+def manage_index_to_sheet(idf, voo, my_spreadsheet):
     # Calculate Price paid, move to google sheet?
-    idf['p'] = idf.merge(df[['date', 'currency', 'mean']], how = 'left', left_on = ['Date', 'Currency'], right_on = ['date', 'currency'])[['mean']]
+    coin_df, coin_list = get_coin_df(idf)
+    idf['p'] = idf.merge(coin_df[['date', 'currency', 'mean']], how = 'left', left_on = ['Date', 'Currency'], right_on = ['date', 'currency'])[['mean']]
     idf.pUSD = idf.p * idf.Transfer * -1
     idf = idf[['Bought', 'Date', 'Amount', 'pUSD']]
     idf.columns = ['Currency','Date','Transfer','pUSD']
     idf_principal_df = idf[['Date', 'pUSD']].groupby(['Date']).sum()
-    
     index_daily, index_totals, index_returns, index_roi = make_tables(idf, idf_principal_df, voo)
     print("Inserting Indexes")
     tosheet.insert_df(index_daily, my_spreadsheet, 'indexDaily', 0)
@@ -123,15 +123,18 @@ def top_ticker_list(x):
     r = r[['available_supply', 'id', 'market_cap_usd', 'percent_change_7d', 'price_usd', 'symbol']]
     return r
 
-
-def make_tables(my_df, principal_df, stock):
-    #my_df = tdf.copy()
-    #principal_df = tdf_principal_df.copy()
+def get_coin_df(my_df):
     my_sd = min(my_df['Date'].tolist())
     coin_list = list(set(my_df['Currency']))
     coin_df = mysql_prices.get_prices_usd_day(coin_list, my_sd)
     coin_df['date'] = pd.to_datetime(coin_df['date'])
     coin_df = coin_df[coin_df.date >= my_sd]
+    return(coin_df, coin_list)
+
+def make_tables(my_df, principal_df, stock):
+    #my_df = tdf.copy()
+    #principal_df = tdf_principal_df.copy()
+    coin_df, coin_list = get_coin_df(my_df)
     my_df = pd.merge(coin_df, my_df, how = "left", left_on = ['date', 'currency'], right_on = ['Date', 'Currency']).fillna(0)
     my_df = my_df.sort_values(['date'])
     #Make the cointoken sum and USD principal cumsum
