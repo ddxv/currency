@@ -8,7 +8,7 @@ import os
 from bittrex.bittrex import Bittrex, API_V2_0
 from binance.client import Client as binClient
 from kucoin.client import Client as kuClient
-#import fromsheet
+import fromsheet
 #import decimal
 #
 
@@ -73,9 +73,7 @@ bit_hist = pd.DataFrame(bit_hist['result'])
 bit_hist['Closed'] = pd.to_datetime(bit_hist['Closed'])
 bit_hist = bit_hist.rename(columns = {'Closed': 'date', 'Exchange': 'product_id', 'OrderType': 'side', 'Quantity': 'bought_amt'})
 
-
 bit_hist = split_buy_sell(bit_hist, '-', 'LIMIT_BUY', False)
-
 bit_hist['sold_amt'] = bit_hist['bought_amt'] * bit_hist['PricePerUnit'] + bit_hist['Commission'] * -1
 
 
@@ -83,13 +81,10 @@ bit_hist['sold_amt'] = bit_hist['bought_amt'] * bit_hist['PricePerUnit'] + bit_h
 # KuCoin
 ku_client = initialize_exchange(kuClient, 'ku')
 
-
-
 ku_hist = ku_client.get_dealt_orders()
 ku_hist = pd.DataFrame(ku_hist['datas'])
 
 ku_hist = ku_hist.rename(columns = {'createdAt': 'date', 'amount': 'bought_amt', 'coinType': 'bought', 'coinTypePair': 'sold', 'dealDirection': 'side', 'dealPrice': 'price'})
-
 ku_hist['sold_amt'] = (ku_hist['bought_amt'] * ku_hist['price'] + ku_hist['fee']) * -1
 ku_hist['date'] = pd.to_datetime(ku_hist['date'], unit = 'ms')
 
@@ -148,36 +143,29 @@ flat_list = [item for sublist in gdax_fills for item in sublist]
 gdax_hist = pd.DataFrame(flat_list)
 gdax_hist = split_buy_sell(gdax_hist, '-', 'buy', True)
 
-gdax_hist[pd.to_numeric(gdax_hist.fee) > 0].head()
+#gdax_hist[pd.to_numeric(gdax_hist.fee) > 0].head()
 
 gdax_hist['usd_volume'] = pd.to_numeric(gdax_hist['size']) * pd.to_numeric(gdax_hist['price'])
 
 gdax_hist['sold_amt'] = np.where(gdax_hist.side == 'sell', pd.to_numeric(gdax_hist['size']) * -1, (pd.to_numeric(gdax_hist['price']) * pd.to_numeric(gdax_hist['size']) + pd.to_numeric(gdax_hist['fee'])) * -1)
 
-
-
 gdax_hist['bought_amt'] = np.where(gdax_hist.side == 'sell', gdax_hist['usd_volume'], gdax_hist['size'])
-
 
 #gdax_hist['usd_volume'] = np.where(gdax_hist.side == 'buy', gdax_hist['usd_volume'], pd.to_numeric(gdax_hist['size']) * pd.to_numeric(gdax_hist['price']))
 
-
 gdax_final = gdax_hist[['created_at', 'trade_id', 'product_id', 'bought', 'sold', 'bought_amt', 'sold_amt']].copy()
 
-
 gdax_final = gdax_final.sort_values('created_at')
-
 gdax_final['bought_amt'] = pd.to_numeric(gdax_final['bought_amt'])
 gdax_final['sold_amt'] = pd.to_numeric(gdax_final['sold_amt'])
-
 gdax_final = gdax_final.rename(columns = {'created_at': 'date'})
 
 
+# Manual Entries
 man_hist = fromsheet.pull_worksheet('housechart', 'ManTrans', None)
 
 man_hist['date'] = pd.to_datetime(man_hist['date'])
 gdax_final['date'] = pd.to_datetime(gdax_final['date'])
-
 
 
 bal_df = pd.concat([gdax_final, man_hist, ku_hist, bit_hist, bin_hist])
@@ -188,7 +176,7 @@ bal_df = bal_df.reset_index()
 
 bal_df[['date', 'BTC']].head(10)
 
-
+# USD BALS
 tosheet.insert_df(bal_df, 'housechart', 'auto_est_bals', 0)
 
 gdax_final[gdax_final['sold_amt'] > 0 ]
@@ -239,7 +227,7 @@ estbals = fromsheet.pull_worksheet('housechart', 'EstBals', None)
 estbals = estbals.set_index('Currency')
 
 
-comp=estbals.merge(combined_bal, how = 'outer', right_index = True, left_index = True)
+comp = estbals.merge(combined_bal, how = 'outer', right_index = True, left_index = True)
 
 comp
 

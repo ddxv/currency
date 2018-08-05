@@ -12,7 +12,7 @@ def get_all_coins_list():
 
 
 
-def update_days(coinList,numDays):
+def update_days(coinList, numDays):
     #MySQL Authorization Docs
     s=open('/home/bitnami/auth/mysql.auth','r').read()
     myUser=json.loads(s)['user']

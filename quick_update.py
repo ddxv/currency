@@ -1,12 +1,7 @@
-import mysql_prices
-from time import sleep,time
+from mysql_prices import update_prices_usd_minute, update_gdax_prices_minutes
 
-then = time() + 40
-while time() < then:
-    #Update MySQL
-    less_mins=True
-    mysql_prices.update_prices_usd_minute(less_mins)
-    sleep(2)
+less_mins=True
+update_gdax_prices_minutes(less_mins)
 
-
+update_prices_usd_minute(less_mins)
 

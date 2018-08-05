@@ -1,11 +1,11 @@
-import fromsheet
-import tosheet
+from sheety import fromsheet, tosheet
 import numpy as np
 import pandas as pd
 import requests
 import mysql_prices
 
 def update_spreadsheet(my_spreadsheet, trans_worksheet):
+    
     voo = stock_ticker_hist('voo')
     
     #Transaction df
@@ -27,9 +27,9 @@ def update_spreadsheet(my_spreadsheet, trans_worksheet):
     # Update MySQL
     less_mins = True
     mysql_prices.update_prices_usd_minute(less_mins)
-    mysql_prices.update_prices_usd_day(all_coins, 2)
+    mysql_prices.update_prices_usd_day(all_coins, 120)
     
-    top_mc = top_ticker_list(150)
+    top_mc = top_ticker_list(200)
     top_mc = top_mc[top_mc.symbol != 'USDT']
     top_mc.loc[top_mc['symbol'] == 'MIOTA', 'symbol'] = 'IOT'
     tosheet.insert_df(top_mc, my_spreadsheet, 'coinmarketcap', 0)
@@ -45,12 +45,17 @@ def update_spreadsheet(my_spreadsheet, trans_worksheet):
 
 def manage_index_to_sheet(idf, voo, my_spreadsheet):
     # Calculate Price paid, move to google sheet?
+    
     coin_df, coin_list = get_coin_df(idf)
+    
     idf['p'] = idf.merge(coin_df[['date', 'currency', 'mean']], how = 'left', left_on = ['Date', 'Currency'], right_on = ['date', 'currency'])[['mean']]
+    
     idf.pUSD = idf.p * idf.Transfer * -1
     idf = idf[['Bought', 'Date', 'Amount', 'pUSD']]
+    
     idf.columns = ['Currency','Date','Transfer','pUSD']
     idf_principal_df = idf[['Date', 'pUSD']].groupby(['Date']).sum()
+    
     index_daily, index_totals, index_returns, index_roi = make_tables(idf, idf_principal_df, voo)
     print("Inserting Indexes")
     tosheet.insert_df(index_daily, my_spreadsheet, 'indexDaily', 0)
@@ -124,8 +129,10 @@ def top_ticker_list(x):
     return r
 
 def get_coin_df(my_df):
+    
     my_sd = min(my_df['Date'].tolist())
     coin_list = list(set(my_df['Currency']))
+    
     coin_df = mysql_prices.get_prices_usd_day(coin_list, my_sd)
     coin_df['date'] = pd.to_datetime(coin_df['date'])
     coin_df = coin_df[coin_df.date >= my_sd]
@@ -134,9 +141,13 @@ def get_coin_df(my_df):
 def make_tables(my_df, principal_df, stock):
     #my_df = tdf.copy()
     #principal_df = tdf_principal_df.copy()
+    
     coin_df, coin_list = get_coin_df(my_df)
+    
     my_df = pd.merge(coin_df, my_df, how = "left", left_on = ['date', 'currency'], right_on = ['Date', 'Currency']).fillna(0)
+    
     my_df = my_df.sort_values(['date'])
+    
     #Make the cointoken sum and USD principal cumsum
     my_df['cumsum'] = my_df.groupby(['currency'])['Transfer'].cumsum()
     my_df['Pcumsum'] = my_df.groupby(['currency'])['pUSD'].cumsum()
@@ -144,7 +155,9 @@ def make_tables(my_df, principal_df, stock):
     my_df['USDVal'] = my_df['mean'] * my_df['cumsum']
     my_df['Return'] = my_df['USDVal'] - my_df['Pcumsum']
     my_df['ROI'] = my_df['Return'] / my_df['Pcumsum']
+    
     pdf = my_df.pivot_table(index = ['date'], columns ='currency', values = ['USDVal', 'Return', 'ROI'])
+    
     #Seperate out each nested column    
     my_df = pdf['USDVal'].copy()
     returns = pdf['Return'].reset_index()
@@ -153,6 +166,7 @@ def make_tables(my_df, principal_df, stock):
     my_df['TotalValue'] = my_df[coin_list].sum(axis = 1)
     my_df['Principal'] = pd.merge(my_df, principal_df, how = "outer", right_index = True, left_index = True).fillna(0)['pUSD'].cumsum()
     my_df = my_df.reset_index()
+    
     my_df['Return'] = my_df['TotalValue'] - my_df['Principal']
     #my_df['tmp'] = my_df['Principal'] * (.08) * (1 / 365)
     my_df = pd.merge(my_df, stock[['date', 'changePercent']], how = 'left', left_on = 'date', right_on = 'date').fillna(0)
@@ -171,11 +185,12 @@ def make_tables(my_df, principal_df, stock):
     roi = roi.replace(np.nan, 0)
     return(my_df, my_df_totals, returns, roi)
 
+
 trans_worksheet = "Trans"
 
 update_spreadsheet("housechart", trans_worksheet)
 
-update_spreadsheet("BitExcelChart", trans_worksheet)
+#update_spreadsheet("BitExcelChart", trans_worksheet)
 
 
 
